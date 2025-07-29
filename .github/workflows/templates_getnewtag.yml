@@ -1,0 +1,88 @@
+# Environment variables defined in a calling workflow are not accessible to this reusable workflow. Refer to the documentation for further details on this limitation.
+name: templates_getNewTag
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: false
+        default: '{"type":"string","default":null}'
+        type: string
+      sprintNumber:
+        required: false
+        default: '{"type":"string","default":null}'
+        type: string
+      tagBranch:
+        required: false
+        default: '{"type":"string","default":null}'
+        type: string
+jobs:
+  get_new_tag:
+    name: Generating New Tag
+    runs-on: ubuntu-latest
+    steps:
+    - name: checkout
+      uses: actions/checkout@v4.1.0
+    - name: Generate New Tag Version
+      id: GenerateNewTagVersion
+      env:
+        VERSION: "${{ fromJSON(inputs.version) }}"
+        SPRINT_NUMBER: "${{ fromJSON(inputs.sprintNumber) }}"
+        TAG_BRANCH: "${{ fromJSON(inputs.tagBranch) }}"
+      run: |-
+        # Debug: Print all variables
+        echo "version: $VERSION"
+        echo "sprintNumber: $SPRINT_NUMBER"
+        echo "tagBranch: $TAG_BRANCH"
+        if [[ "$TAG_BRANCH" == "master" || "$TAG_BRANCH" == "main" ]]; then
+          TAG_BRANCH="prod"
+        fi
+        # Retrieve existing tags and extract build number
+        if [[ "$TAG_BRANCH" == "develop" || "$TAG_BRANCH" == "test" ]]; then
+          echo "Searching for tags: $VERSION/$TAG_BRANCH/$SPRINT_NUMBER*"
+          existing_tags=$(git tag -l "$VERSION/$TAG_BRANCH/$SPRINT_NUMBER*")
+          build_number=$(echo "$existing_tags" | grep -oP "$VERSION/$TAG_BRANCH/$SPRINT_NUMBER\+\K\d+" | sort -rn | head -n1)
+        elif [[ "$TAG_BRANCH" == "uat" || "$TAG_BRANCH" == "prod" ]]; then
+          echo "Searching for tags: $VERSION/$TAG_BRANCH/*"
+          existing_tags=$(git tag -l "$VERSION/$TAG_BRANCH/*")
+          build_number=$(echo "$existing_tags" | grep -oP "$VERSION/$TAG_BRANCH/\K\d+" | sort -rn | head -n1)
+        else # For testing
+          echo "Searching for tags: $VERSION/develop/$SPRINT_NUMBER*"
+          existing_tags=$(git tag -l "$VERSION/develop/$SPRINT_NUMBER*")
+          build_number=$(echo "$existing_tags" | grep -oP "$VERSION/develop/$SPRINT_NUMBER\+\K\d+" | sort -rn | head -n1)
+        fi
+        echo "Existing tags: $existing_tags"
+        echo "Current build number: $build_number"
+        # After finding existing tags, get the latest tag's message and extract date
+        if [ ! -z "$existing_tags" ]; then
+          latest_tag=$(echo "$existing_tags" | tail -n1)
+          tag_message=$(git tag -n99 "$latest_tag" 2>/dev/null || echo "")
+          # Try to extract date from tag message
+          tag_date=$(echo "$tag_message" | grep -oP "on \K\d{4}-\d{2}-\d{2}" || echo "")
+          if [ ! -z "$tag_date" ]; then
+            echo "Previous tag date: $tag_date"
+            echo "##vso[task.setvariable variable=PREV_TAG_DATE;isoutput=true]$tag_date"
+          fi
+        fi
+        # Increment build number or set to 1 if not present
+        if [ -z "$build_number" ]; then
+          build_number=1
+        else
+          build_number=$((build_number + 1))
+        fi
+        echo "New build number: $build_number"
+        # Combine version components
+        if [[ "$TAG_BRANCH" == "develop" || "$TAG_BRANCH" == "test" ]]; then
+          new_tag="$VERSION/$TAG_BRANCH/$SPRINT_NUMBER+${build_number}"
+          newDockerTag="${VERSION}.${SPRINT_NUMBER}.${build_number}"
+        elif [[ "$TAG_BRANCH" == "uat" || "$TAG_BRANCH" == "prod" ]]; then
+          new_tag="$VERSION/$TAG_BRANCH/${build_number}"
+          newDockerTag="${VERSION}.${build_number}"
+        else # For testing
+          new_tag="$VERSION/develop/$SPRINT_NUMBER+${build_number}"
+          newDockerTag="${VERSION}.${SPRINT_NUMBER}.${build_number}"
+        fi
+        # Print the produced tag version
+        echo "New tag version: $new_tag"
+        echo "##vso[task.setvariable variable=NEW_TAG;isoutput=true]$new_tag"
+        echo "##vso[task.setvariable variable=NEW_DOCKER_TAG;isoutput=true]$newDockerTag"
+      shell: bash
