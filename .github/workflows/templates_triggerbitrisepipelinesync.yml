@@ -1,0 +1,90 @@
+# Environment variables defined in a calling workflow are not accessible to this reusable workflow. Refer to the documentation for further details on this limitation.
+name: templates_triggerBitrisePipelineSync
+on:
+  workflow_call:
+    inputs:
+      appSlug:
+        required: false
+        default: "$(APP_SLUG)"
+        type: string
+      workflowId:
+        required: false
+        default: "$(WORKFLOW_ID)"
+        type: string
+      branch:
+        required: false
+        default: main
+        type: string
+      tag:
+        required: false
+        default: ''
+        type: string
+jobs:
+  trigger_bitrise:
+    name: Trigger and Wait for Bitrise Build
+    runs-on: ubuntu-latest
+    env:
+      TAG_TO_SEND: "${{ inputs.tag }}"
+    steps:
+    - name: checkout
+      uses: actions/checkout@v4.1.0
+    - name: Trigger & Wait for Bitrise Build
+      env:
+        BITRISE_ACCESS_KEY: "${{ secrets.BITRISE_ACCESS_KEY }}"
+      run: |-
+        set -e
+        TAG_VALUE="${TAG_TO_SEND}"
+        echo "Tag parameter received: ${{ inputs.tag }}"
+        echo "Tag variable value: $TAG_VALUE"
+        if [ -z "$TAG_VALUE" ]; then
+          echo "Error: No tag provided. Tag parameter appears to be empty."
+          exit 1
+        fi
+        echo "Triggering Bitrise build with tag: $TAG_VALUE..."
+        # Trigger the build and get response
+        RESPONSE=$(curl -s -X POST \
+          "https://api.bitrise.io/v0.1/apps/${{ inputs.appSlug }}/builds" \
+          -H "Authorization: $BITRISE_ACCESS_KEY" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "hook_info": {"type": "bitrise"},
+            "build_params": {
+              "branch": "${{ inputs.branch }}",
+              "workflow_id": "${{ inputs.workflowId }}",
+              "environments": [
+                {
+                  "mapped_to": "TAG_FROM_AZURE",
+                  "value": "'"$TAG_VALUE"'",
+                  "is_expand": true
+                }
+              ]
+            }
+          }')
+        echo "Trigger response: $RESPONSE"
+        # Extract the build_slug
+        BUILD_SLUG=$(echo "$RESPONSE" | jq -r '.build_slug')
+        if [ "$BUILD_SLUG" == "null" ] || [ -z "$BUILD_SLUG" ]; then
+          echo "Error: Failed to retrieve build_slug from Bitrise response"
+          exit 1
+        fi
+        echo "Build slug: $BUILD_SLUG"
+        echo "Polling Bitrise until build is complete..."
+        # Polling loop
+        while true; do
+          STATUS_RESPONSE=$(curl -s -X GET \
+            "https://api.bitrise.io/v0.1/apps/${{ inputs.appSlug }}/builds/$BUILD_SLUG" \
+            -H "Authorization: $BITRISE_ACCESS_KEY")
+          STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.data.status_text')
+          echo "Current build status: $STATUS"
+          sleep 5
+          if [[ "$STATUS" == "success" || "$STATUS" == "error" || "$STATUS" == "aborted" ]]; then
+            break
+          fi
+        done
+        echo "Final build status: $STATUS"
+        if [[ "$STATUS" != "success" ]]; then
+          echo "Bitrise build failed or was aborted."
+          exit 1
+        fi
+        echo "Bitrise build completed successfully."
+      shell: bash

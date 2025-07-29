@@ -1,0 +1,19 @@
+name: AzureDevOpsBitrise/AzureDevOpsBitrise
+on:
+  workflow_dispatch:
+env:
+  WORKFLOW_ID: send-notification
+jobs:
+  templates_getNewTag:
+    name: templates_getNewTag
+    uses: "./.github/workflows/templates_getnewtag.yml"
+    with:
+      version: '"1.0.0"'
+      sprintNumber: '"123"'
+      tagBranch: '"main"'
+  templates_triggerBitrisePipelineSync:
+    name: templates_triggerBitrisePipelineSync
+    needs: templates_getNewTag
+    uses: "./.github/workflows/templates_triggerbitrisepipelinesync.yml"
+    with:
+      tag: "$[ stageDependencies.Generate_Tag.get_new_tag.outputs['GenerateNewTagVersion.NEW_TAG'] ]"
